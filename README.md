@@ -53,3 +53,33 @@ curl -sL https://gitee.com/shixiuhai/node_proxy/raw/main/remove-linux.sh | sudo 
 2. Linux执行需要sudo权限
 3. 安装完成后服务会自动启动
 4. 日志文件默认位于项目目录下的server.log
+
+## 使用说明
+
+### 本地访问
+服务启动后默认监听 `http://localhost:9000`
+
+代理流媒体URL示例：
+```bash
+# 代理m3u8文件
+http://localhost:9000/?target=http://example.com/stream.m3u8
+
+# 代理flv文件
+http://localhost:9000/?target=http://example.com/stream.flv
+
+# 代理mp4文件
+http://localhost:9000/?target=http://example.com/stream.mp4
+```
+
+### 容器访问
+如果使用Docker运行，确保映射9000端口：
+```bash
+docker run -p 9000:9000 your-image-name
+```
+访问方式与本地相同，将localhost替换为容器IP或主机名
+
+### 状态统计
+查看代理服务统计信息：
+```bash
+http://localhost:9000/stats
+```
