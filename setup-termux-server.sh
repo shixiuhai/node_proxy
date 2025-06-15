@@ -5,8 +5,8 @@
 # Author: ChatGPT (OpenAI)
 # =======================================
 
-REPO_URL="https://github.com/yourusername/yourrepo.git"  # ← 替换为你的仓库地址
-PROJECT_DIR="$HOME/yourrepo"
+REPO_URL="git clone https://gitee.com/shixiuhai/node_proxy.git"  # ← 替换为你的仓库地址
+PROJECT_DIR="$HOME/node_proxy"
 NODE_CMD="node server.js"
 LOG_FILE="server.log"
 
