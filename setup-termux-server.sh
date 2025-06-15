@@ -67,16 +67,25 @@ fi
 # === 添加自启动逻辑 ===
 echo "🧩 [5/6] 配置 .bashrc 自动重启..."
 
-# 确保 bashrc 存在
-touch "$BASHRC_FILE"
+# === 安全写入 .bashrc ===
+if [ ! -f "$BASHRC_FILE" ]; then
+    echo "📄 .bashrc 不存在，创建中..."
+    if echo "# Auto-start setup" > "$BASHRC_FILE"; then
+        echo "✅ 成功创建 .bashrc"
+    else
+        echo "❌ 无法创建 .bashrc，请检查 Termux 权限或磁盘空间！"
+        exit 1
+    fi
+fi
 
-# 检查并追加
+# 避免重复写入启动命令
 if grep -Fxq "$STARTUP_LINE" "$BASHRC_FILE"; then
     echo "ℹ️  .bashrc 已包含启动命令，跳过追加。"
 else
     echo "$STARTUP_LINE" >> "$BASHRC_FILE"
     echo "✅ 启动命令已追加到 .bashrc"
 fi
+
 
 echo "🎉 [6/6] 所有操作完成！服务状态："
 pgrep -fl "$NODE_CMD" || echo "⚠️ 服务未运行，请手动检查日志：$LOG_FILE"
