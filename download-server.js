@@ -4,7 +4,6 @@ const url = require('url');
 
 const PORT = 8888;
 
-// 常用 User-Agent 列表，避免被CDN识别为机器人
 const UA_LIST = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/114 Safari/537.36',
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/114 Safari/537.36',
@@ -12,12 +11,24 @@ const UA_LIST = [
   'Mozilla/5.0 (Linux; Android 10; Pixel 4) AppleWebKit/537.36 Chrome/114 Mobile Safari/537.36',
 ];
 
-// 随机获取User-Agent
 function getRandomUserAgent() {
   return UA_LIST[Math.floor(Math.random() * UA_LIST.length)];
 }
 
 const server = http.createServer((req, res) => {
+  console.log(`[${new Date().toISOString()}] Incoming request: ${req.method} ${req.url}`);
+
+  // 支持跨域预检请求
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
   const reqUrl = url.parse(req.url, true);
 
   if (reqUrl.pathname !== '/proxy') {
@@ -42,7 +53,6 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 构造请求选项
   const options = {
     protocol: parsedTarget.protocol,
     hostname: parsedTarget.hostname,
@@ -52,30 +62,29 @@ const server = http.createServer((req, res) => {
     headers: {
       'User-Agent': getRandomUserAgent(),
       'Accept': '*/*',
-      'Accept-Encoding': 'identity', // 禁用gzip压缩，避免响应处理复杂
+      'Accept-Encoding': 'identity', // 不使用gzip，方便直接传输
       'Connection': 'close',
-      // 你可以根据需要添加更多伪装请求头，比如 Referer、Cookie 等
+      // 你也可以在这里加 Referer、Cookie 等头
     },
   };
 
-  // 选择http或https模块
-  const proxyReq = (parsedTarget.protocol === 'https:' ? https : http).request(options, proxyRes => {
-    // 过滤和转发响应头，避免跨域或cdn检测
-    const headers = proxyRes.headers;
+  const proxyModule = parsedTarget.protocol === 'https:' ? https : http;
 
-    // 删除或修改可能暴露代理信息的头
-    delete headers['content-encoding']; // 因为关闭了gzip
+  const proxyReq = proxyModule.request(options, proxyRes => {
+    console.log(`[${new Date().toISOString()}] Proxy response status: ${proxyRes.statusCode} for ${targetUrl}`);
+
+    // 过滤掉压缩编码头，防止客户端解压异常
+    const headers = { ...proxyRes.headers };
+    delete headers['content-encoding'];
     delete headers['transfer-encoding'];
 
-    // 设置响应头
     res.writeHead(proxyRes.statusCode, headers);
 
-    // 流式传输响应体
     proxyRes.pipe(res);
   });
 
   proxyReq.on('error', err => {
-    console.error('Proxy request error:', err.message);
+    console.error(`[${new Date().toISOString()}] Proxy request error: ${err.message}`);
     res.writeHead(500, { 'Content-Type': 'text/plain' });
     res.end('Proxy request error');
   });
@@ -83,6 +92,6 @@ const server = http.createServer((req, res) => {
   proxyReq.end();
 });
 
-server.listen(PORT, () => {
-  console.log(`Proxy server running on http://localhost:${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Proxy server running at http://0.0.0.0:${PORT}`);
 });
