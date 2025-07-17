@@ -1,231 +1,155 @@
-// 这个代理服务器具备以下特点：
+// 用于构造TLS指纹跳过cdn检测
+const http = require('http');
+const url = require('url');
+const httpProxy = require('http-proxy');
+const https = require('https');
 
-// 支持 HTTP 和 HTTPS 请求转发；
-
-// 优先使用 HTTP/2 以提高效率；
-
-// 可自定义 referer 和 cookie；
-
-// 随机 User-Agent，模拟不同设备；
-
-// 支持 Range 请求（适用于视频、文件分段下载）；
-
-// 具备基础的反爬特性；
-
-// 支持跨域访问（CORS）
-
-// 引入 Node.js 内置模块
-const http = require('http');         // 创建 HTTP 服务器和请求
-const https = require('https');       // 发起 HTTPS 请求
-const url = require('url');           // 解析 URL
-const http2 = require('http2');       // 发起 HTTP/2 请求
-
-// 设置服务监听端口
 const PORT = 8888;
 
-// 随机 User-Agent 列表（用于模拟不同客户端，防止被目标网站反爬）
-const UA_LIST = [
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/114 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/114 Safari/537.36',
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148',
-  'Mozilla/5.0 (Linux; Android 10; Pixel 4) AppleWebKit/537.36 Chrome/114 Mobile Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Firefox/118.0',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 11_0) AppleWebKit/605.1.15 Safari/605.1.15',
-  'Mozilla/5.0 (iPad; CPU OS 14_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148',
-  'Mozilla/5.0 (Linux; Android 11; SM-G998U) AppleWebKit/537.36 Chrome/115 Mobile Safari/537.36',
-  'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/109.0',
-  'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 Chrome/106 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 12_2_1) AppleWebKit/537.36 Chrome/98 Safari/537.36',
-  'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 Chrome/115 Mobile Safari/537.36',
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 16_2 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Edge/117.0.2045.31',
-];
+// 1. 优化 TLS 指纹：配置全局 HTTPS Agent
+const customCiphers = [
+    'TLS_AES_128_GCM_SHA256',
+    'TLS_AES_256_GCM_SHA384',
+    'TLS_CHACHA20_POLY1305_SHA256',
+    'ECDHE-ECDSA-AES128-GCM-SHA256',
+    'ECDHE-RSA-AES128-GCM-SHA256',
+    'ECDHE-ECDSA-AES256-GCM-SHA384',
+    'ECDHE-RSA-AES256-GCM-SHA384',
+    'ECDHE-ECDSA-CHACHA20-POLY1305',
+    'ECDHE-RSA-CHACHA20-POLY1305',
+].join(':');
 
-// 随机获取一个 User-Agent
-function getRandomUserAgent() {
-  return UA_LIST[Math.floor(Math.random() * UA_LIST.length)];
-}
-
-// 创建 HTTP 代理服务器
-const server = http.createServer((req, res) => {
-  console.log(`[${new Date().toISOString()}] Incoming request: ${req.method} ${req.url}`);
-
-  // 设置 CORS 头，允许跨域访问
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  // 处理浏览器的预检请求（OPTIONS）
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204);
-    res.end();
-    return;
-  }
-
-  const reqUrl = url.parse(req.url, true); // 解析 URL 和参数
-
-  // 只允许访问 /proxy 路径
-  if (reqUrl.pathname !== '/proxy') {
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
-    res.end('Not Found');
-    return;
-  }
-
-  // 获取 query 参数：url、referer、cookie
-  const targetUrl = reqUrl.query.url;
-  const customReferer = reqUrl.query.referer;
-  const customCookie = reqUrl.query.cookie;
-
-  // 没有传目标地址
-  if (!targetUrl) {
-    res.writeHead(400, { 'Content-Type': 'text/plain' });
-    res.end('Missing url query parameter');
-    return;
-  }
-
-  let parsedTarget;
-  try {
-    parsedTarget = new URL(targetUrl); // 尝试解析目标 URL
-  } catch (err) {
-    res.writeHead(400, { 'Content-Type': 'text/plain' });
-    res.end('Invalid target url');
-    return;
-  }
-
-  // 构造请求头（包括伪装成正常浏览器）
-  const baseHeaders = {
-    'User-Agent': getRandomUserAgent(),
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Encoding': 'identity',  // 避免 gzip，方便中转处理
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Connection': 'keep-alive',
-    'Upgrade-Insecure-Requests': '1',
-    'DNT': '1',
-    'Sec-Fetch-Site': 'cross-site',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-User': '?1',
-    'Sec-Fetch-Dest': 'document',
-    'Referer': customReferer || parsedTarget.origin + '/',
-    'Cookie': customCookie || '',
-  };
-
-  // 如果请求中带有 Range（比如视频预加载），保留转发
-  if (req.headers['range']) {
-    baseHeaders['Range'] = req.headers['range'];
-  }
-
-  // 对 https 使用优先尝试 HTTP/2，失败则回退 HTTP/1.1
-  if (parsedTarget.protocol === 'https:') {
-    tryHttp2(parsedTarget, baseHeaders, res, () => {
-      tryHttp1(parsedTarget, baseHeaders, res);
-    });
-  } else {
-    tryHttp1(parsedTarget, baseHeaders, res);
-  }
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  ciphers: customCiphers,
+  honorCipherOrder: true,
+  minVersion: 'TLSv1.2',
+  maxVersion: 'TLSv1.3',
 });
 
-// 发起 HTTP/2 请求，如果失败则调用 fallback 回退函数
-function tryHttp2(parsedTarget, headers, res, fallback) {
-  const client = http2.connect(parsedTarget.origin); // 建立 HTTP/2 会话
+// 创建代理服务器实例
+const proxy = httpProxy.createProxyServer({
+    agent: httpsAgent,
+    changeOrigin: true, // 必须为 true，以正确设置 Host 头
+    secure: false,      // 对于自签名证书等情况很有用
+});
 
-  client.on('error', (err) => {
-    console.warn(`[${new Date().toISOString()}] HTTP/2 connect error: ${err.message}`);
-    client.destroy(); // 销毁连接
-    fallback(); // 回退到 HTTP/1.1
-  });
+// --- Header 伪装工具函数 (保持不变) ---
+function getRandomUA() {
+  const uaList = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15',
+  ];
+  return uaList[Math.floor(Math.random() * uaList.length)];
+}
 
-  // 构造 HTTP/2 请求头（必须带有 :method 和 :path）
-  const reqHeaders = {
-    ':method': 'GET',
-    ':path': parsedTarget.pathname + parsedTarget.search,
-    ...sanitizeHttp2Headers(headers),
+function spoofRequestHeaders(req, targetUrlObject) {
+  const newUA = getRandomUA();
+  const targetHost = targetUrlObject.host;
+
+  const headersToRemove = [
+    'via', 'x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-host',
+    'proxy-connection', 'upgrade-insecure-requests',
+  ];
+  headersToRemove.forEach(header => delete req.headers[header]);
+
+  const spoofedHeaders = {
+    'connection': 'keep-alive',
+    'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'upgrade-insecure-requests': '1',
+    'user-agent': newUA,
+    'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+    'sec-fetch-site': 'none',
+    'sec-fetch-mode': 'navigate',
+    'sec-fetch-user': '?1',
+    'sec-fetch-dest': 'document',
+    // 注意：Referer 最好由客户端传递，如果客户端不传，我们伪造一个
+    'referer': req.headers['referer'] || `${targetUrlObject.protocol}//${targetHost}/`,
+    'accept-encoding': 'gzip, deflate, br',
+    'accept-language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7',
   };
+  
+  // 使用伪造的头覆盖客户端传来的头
+  req.headers = { ...req.headers, ...spoofedHeaders };
+}
 
-  // 添加辅助函数：过滤非法头部
-  function sanitizeHttp2Headers(headers) {
-    const forbidden = ['connection', 'upgrade', 'keep-alive', 'transfer-encoding', 'proxy-connection'];
-    const newHeaders = {};
-    for (const key in headers) {
-      if (!forbidden.includes(key.toLowerCase())) {
-        newHeaders[key] = headers[key];
-      }
-    }
-    return newHeaders;
+
+// --- API 风格的代理服务器逻辑 ---
+
+const server = http.createServer((req, res) => {
+  // 解析请求，第二个参数为 true 以解析 query string
+  const requestUrlParts = url.parse(req.url, true);
+  
+  // 1. 检查请求路径是否是我们期望的 API 端点
+  if (requestUrlParts.pathname !== '/proxy') {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Not Found: Please use the /proxy endpoint.');
+    return;
+  }
+  
+  // 2. 从查询参数中获取目标 URL
+  const targetUrl = requestUrlParts.query.url;
+  
+  if (!targetUrl) {
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    res.end("Bad Request: Missing 'url' query parameter.");
+    return;
+  }
+  
+  let targetUrlObject;
+  try {
+    targetUrlObject = new URL(targetUrl);
+  } catch (e) {
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    res.end("Bad Request: Invalid 'url' provided.");
+    return;
   }
 
-  const h2Req = client.request(reqHeaders); // 发送 HTTP/2 请求
+  const { protocol, hostname, port, pathname, search } = targetUrlObject;
 
-  let statusCode = 200;
-  const responseHeaders = {};
+  // 3. 验证协议
+  if (protocol !== 'http:' && protocol !== 'https:') {
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    res.end('Bad Request: Only http and https protocols are supported.');
+    return;
+  }
 
-  // 响应头处理
-  h2Req.on('response', (headers) => {
-    statusCode = headers[':status'] || 200;
-    for (const [key, value] of Object.entries(headers)) {
-      // 过滤掉某些不兼容的编码头
-      if (![':status', 'content-encoding', 'transfer-encoding'].includes(key.toLowerCase())) {
-        responseHeaders[key] = value;
-      }
+  console.log(`[API PROXY] ${req.method} -> ${targetUrl}`);
+
+  // 4. 应用深度头部伪装
+  spoofRequestHeaders(req, targetUrlObject);
+
+  // 5. 关键：修改 req.url，让 http-proxy 请求正确的路径
+  // http-proxy 会使用 req.url 作为目标服务器上的路径
+  req.url = `${pathname}${search}`;
+  
+  // 6. 设置代理目标并执行代理
+  const target = `${protocol}//${hostname}${port ? ':' + port : ''}`;
+  
+  proxy.web(req, res, { target }, (err) => {
+    console.error(`[Proxy Error] for target ${targetUrl}: ${err.message}`);
+    if (!res.headersSent) {
+      res.writeHead(502, { 'Content-Type': 'text/plain' });
+      res.end('Proxy Error: ' + err.message);
     }
-    res.writeHead(statusCode, responseHeaders); // 转发响应头
   });
+});
 
-  // 数据流传输
-  h2Req.on('data', (chunk) => res.write(chunk));
-  h2Req.on('end', () => {
-    res.end();
-    client.close(); // 关闭连接
-    console.log(`[${new Date().toISOString()}] HTTP/2 response ${statusCode} from ${parsedTarget.href}`);
-  });
+// 清理 http-proxy 自动添加的头
+proxy.on('proxyReq', (proxyReq) => {
+    proxyReq.removeHeader('x-forwarded-for');
+    proxyReq.removeHeader('x-forwarded-proto');
+    proxyReq.removeHeader('x-forwarded-host');
+    proxyReq.removeHeader('via');
+});
 
-  h2Req.on('error', (err) => {
-    console.error(`[${new Date().toISOString()}] HTTP/2 stream error: ${err.message}`);
-    res.writeHead(500, { 'Content-Type': 'text/plain' });
-    res.end('Proxy error: ' + err.message);
-    client.close();
-  });
+// 已不再需要 server.on('connect', ...)
 
-  h2Req.end(); // 完成请求
-}
-
-// 发起 HTTP/1.1 请求（用于 http 或 HTTP/2 失败的情况）
-function tryHttp1(parsedTarget, headers, res) {
-  const options = {
-    protocol: parsedTarget.protocol,
-    hostname: parsedTarget.hostname,
-    port: parsedTarget.port || (parsedTarget.protocol === 'https:' ? 443 : 80),
-    path: parsedTarget.pathname + parsedTarget.search,
-    method: 'GET',
-    headers,
-    timeout: 10000,
-  };
-
-  // 根据协议选择模块
-  const proxyModule = parsedTarget.protocol === 'https:' ? https : http;
-
-  // 发起请求
-  const proxyReq = proxyModule.request(options, proxyRes => {
-    // 过滤不兼容的响应头
-    const filteredHeaders = { ...proxyRes.headers };
-    delete filteredHeaders['content-encoding'];
-    delete filteredHeaders['transfer-encoding'];
-
-    res.writeHead(proxyRes.statusCode, filteredHeaders); // 写入状态码和头
-    proxyRes.pipe(res); // 直接转发数据流
-    console.log(`[${new Date().toISOString()}] HTTP/1.1 response ${proxyRes.statusCode} from ${parsedTarget.href}`);
-  });
-
-  // 错误处理
-  proxyReq.on('error', err => {
-    console.error(`[${new Date().toISOString()}] HTTP/1.1 proxy error: ${err.message}`);
-    res.writeHead(500, { 'Content-Type': 'text/plain' });
-    res.end('Proxy error: ' + err.message);
-  });
-
-  proxyReq.end(); // 发送请求
-}
-
-// 启动服务器监听
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🛡 Proxy server running at http://0.0.0.0:${PORT}/proxy`);
+  console.log(`🔥 API 风格的反检测代理服务运行中`);
+  console.log(`🔥 使用方法: http://<Your_IP>:${PORT}/proxy?url=<TARGET_URL>`);
 });
