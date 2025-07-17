@@ -138,8 +138,20 @@ function tryHttp2(parsedTarget, headers, res, fallback) {
   const reqHeaders = {
     ':method': 'GET',
     ':path': parsedTarget.pathname + parsedTarget.search,
-    ...headers,
+    ...sanitizeHttp2Headers(headers),
   };
+
+  // 添加辅助函数：过滤非法头部
+  function sanitizeHttp2Headers(headers) {
+    const forbidden = ['connection', 'upgrade', 'keep-alive', 'transfer-encoding', 'proxy-connection'];
+    const newHeaders = {};
+    for (const key in headers) {
+      if (!forbidden.includes(key.toLowerCase())) {
+        newHeaders[key] = headers[key];
+      }
+    }
+    return newHeaders;
+  }
 
   const h2Req = client.request(reqHeaders); // 发送 HTTP/2 请求
 
