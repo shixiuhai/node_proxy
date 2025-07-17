@@ -18,7 +18,7 @@ function getRandomUserAgent() {
 const server = http.createServer((req, res) => {
   console.log(`[${new Date().toISOString()}] Incoming request: ${req.method} ${req.url}`);
 
-  // 支持跨域预检请求
+  // CORS 支持
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -38,6 +38,9 @@ const server = http.createServer((req, res) => {
   }
 
   const targetUrl = reqUrl.query.url;
+  const customReferer = reqUrl.query.referer;
+  const customCookie = reqUrl.query.cookie;
+
   if (!targetUrl) {
     res.writeHead(400, { 'Content-Type': 'text/plain' });
     res.end('Missing url query parameter');
@@ -53,45 +56,60 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  const headers = {
+    'User-Agent': getRandomUserAgent(),
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Accept-Encoding': 'identity',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1',
+    'DNT': '1',
+    'Sec-Fetch-Site': 'cross-site',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-User': '?1',
+    'Sec-Fetch-Dest': 'document',
+    'Referer': customReferer || parsedTarget.origin + '/', // 可传入模拟 Referer
+    'Cookie': customCookie || '',                          // 可传入模拟 Cookie
+  };
+
+  // 支持转发 Range 请求（视频需要）
+  if (req.headers['range']) {
+    headers['Range'] = req.headers['range'];
+  }
+
   const options = {
     protocol: parsedTarget.protocol,
     hostname: parsedTarget.hostname,
     port: parsedTarget.port || (parsedTarget.protocol === 'https:' ? 443 : 80),
     path: parsedTarget.pathname + parsedTarget.search,
     method: 'GET',
-    headers: {
-      'User-Agent': getRandomUserAgent(),
-      'Accept': '*/*',
-      'Accept-Encoding': 'identity', // 不使用gzip，方便直接传输
-      'Connection': 'close',
-      // 你也可以在这里加 Referer、Cookie 等头
-    },
+    headers,
+    timeout: 10000, // 10秒超时
   };
 
   const proxyModule = parsedTarget.protocol === 'https:' ? https : http;
 
   const proxyReq = proxyModule.request(options, proxyRes => {
-    console.log(`[${new Date().toISOString()}] Proxy response status: ${proxyRes.statusCode} for ${targetUrl}`);
+    console.log(`[${new Date().toISOString()}] Proxy response ${proxyRes.statusCode} from ${targetUrl}`);
 
-    // 过滤掉压缩编码头，防止客户端解压异常
-    const headers = { ...proxyRes.headers };
-    delete headers['content-encoding'];
-    delete headers['transfer-encoding'];
+    // 过滤压缩头，防止客户端无法解码
+    const filteredHeaders = { ...proxyRes.headers };
+    delete filteredHeaders['content-encoding'];
+    delete filteredHeaders['transfer-encoding'];
 
-    res.writeHead(proxyRes.statusCode, headers);
-
+    res.writeHead(proxyRes.statusCode, filteredHeaders);
     proxyRes.pipe(res);
   });
 
   proxyReq.on('error', err => {
-    console.error(`[${new Date().toISOString()}] Proxy request error: ${err.message}`);
+    console.error(`[${new Date().toISOString()}] Proxy error: ${err.message}`);
     res.writeHead(500, { 'Content-Type': 'text/plain' });
-    res.end('Proxy request error');
+    res.end('Proxy error: ' + err.message);
   });
 
   proxyReq.end();
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Proxy server running at http://0.0.0.0:${PORT}`);
+  console.log(`🛡 Proxy server running at http://0.0.0.0:${PORT}/proxy`);
 });
